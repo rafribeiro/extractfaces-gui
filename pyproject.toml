@@ -1,0 +1,30 @@
+[project]
+name = "extractfaces-gui"
+version = "0.1.0"
+description = "GUI application to extract faces from videos"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Rafael O. Ribeiro", email = "rafaeloliveiraribeiro@gmail.com" }]
+dependencies = [
+    "PySide6>=6.10,<7",
+    "forensicface>=0.8,<0.9",
+    # Newer CUDA extras currently resolve to packages without Windows wheels.
+    "onnxruntime-gpu>=1.25,<1.26; sys_platform == 'win32'",
+]
+
+[project.gui-scripts]
+extract-faces = "extract_faces:main"
+
+[project.urls]
+Homepage = "https://github.com/rafribeiro/extractfaces-gui"
+Repository = "https://github.com/rafribeiro/extractfaces-gui"
+Issues = "https://github.com/rafribeiro/extractfaces-gui/issues"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "extract_faces"
