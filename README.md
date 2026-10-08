@@ -8,7 +8,7 @@ dimensions, frame rate, duration, and media codecs.
 
 ## Run locally
 
-Requires Python 3.14 or newer. From this project folder:
+Requires Python 3.13 or newer. From this project folder:
 
 ```powershell
 uv sync
@@ -34,7 +34,7 @@ for the layout and model credits. The app does not download model weights.
 CPU processing is the default; enable GPU only with a compatible GPU/runtime.
 Forensicface installs CUDA dependencies even when using CPU, so installation
 can be a large download. ONNX Runtime is constrained to the 1.25 series on
-Windows because newer CUDA extras currently lack compatible Windows wheels.
+all platforms because newer CUDA extras currently lack compatible Windows wheels.
 
 ## Use the app
 

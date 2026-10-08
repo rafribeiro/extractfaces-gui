@@ -22,16 +22,16 @@ The PyPI name must be available; a pending publisher does not reserve it.
 If the project already exists under your account, add the trusted publisher
 from that project's **Publishing** settings instead.
 
-## Release version 0.1.0
+## Release version 0.1.1
 
 1. Commit and push the code, including the workflow.
 2. On GitHub, open **Releases → Draft a new release**.
-3. Create tag `v0.1.0` targeting the commit you want to publish.
+3. Create tag `v0.1.1` targeting the commit you want to publish.
 4. Publish the release. This starts the workflow and uploads to PyPI.
 5. Check the repository's **Actions** tab for the result.
 
 After success, users can install with `pip install extractfaces-gui` and launch
-with `extract-faces`. They need Python 3.14 or newer and the detector model
+with `extract-faces`. They need Python 3.13 or newer and the detector model
 described in README.md.
 
 For later releases, increase the version in `pyproject.toml`, refresh the
