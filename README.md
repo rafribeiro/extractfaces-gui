@@ -41,11 +41,15 @@ all platforms because newer CUDA extras currently lack compatible Windows wheels
 1. Open a video with the file picker or drop a video file onto the app (the first
    local file is opened if several are dropped). Playback is silent. Metadata includes dimensions, frame rate,
    duration, and codecs when available.
-2. Pause or drag a rectangle on the preview. Detection searches that area in
+2. Click or drag the playback timeline to seek; Left and Right seek by 10 seconds.
+   Pause or drag a rectangle on the preview. Detection searches that area in
    every processed frame. Clear the region to search the full frame.
-3. Choose an empty output folder, crop size multiplier, frames to skip, and
-   start time. A multiplier of 2 doubles the detected box's dimensions;
-   skipping 4 frames processes every fifth frame.
+3. Choose an empty output folder, crop size multiplier, sampling interval, and
+   start time. A multiplier of 2 doubles the detected box's dimensions.
+   **Process every Nth frame**: 1 processes every frame; 5 processes one in five.
+   Enable **Stop at** to specify an optional stop time in seconds, later than
+   the start time. Frames at or after the stop time are excluded. Leave it off
+   to process to the end. Both times have a **Use current position** button.
    Set **Detector size (det_size)** and **Detection threshold (det_thresh)**
    before extraction to configure SCRFD. Defaults are 320 and 0.5. Larger
    detector sizes take longer; lower thresholds may accept more false positives.
@@ -77,4 +81,4 @@ All UI and extraction code is in `src/extract_faces/app.py`:
 
 Run the tests with `uv run python -m unittest discover -s tests -v`.
 They exercise the GUI without a visible window and use a fake detector with
-forensicface's real video extraction method, so model weights are unnecessary.
+real video reading and crop saving, so model weights are unnecessary.

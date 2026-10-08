@@ -15,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import QMimeData, QPointF, QRectF, Qt, QUrl
 from PySide6.QtGui import QDropEvent, QImage
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 from forensicface.app import ForensicFace
 from extract_faces.app import ConsoleStream, ExtractionWorker, MainWindow, VideoView, main
 
@@ -37,6 +38,30 @@ class AppTests(unittest.TestCase):
     def test_window_constructs(self):
         window = MainWindow()
         self.assertFalse(window.extract_button.isEnabled())
+        window.close()
+
+    def test_seeking_and_stop_validation(self):
+        window = MainWindow()
+        window.seek.resize(400, 30)
+        window.seek.setRange(0, 60000)
+        with patch.object(window.player, "setPosition") as seek:
+            QTest.mouseClick(window.seek, Qt.MouseButton.LeftButton, pos=window.seek.rect().center())
+            self.assertAlmostEqual(seek.call_args.args[0], 30000, delta=1000)
+            window.video_path = "video.avi"
+            with patch.object(window.player, "position", return_value=25000), patch.object(window.player, "duration", return_value=60000):
+                QTest.keyClick(window, Qt.Key.Key_Left)
+                seek.assert_called_with(15000)
+                QTest.keyClick(window, Qt.Key.Key_Right)
+                seek.assert_called_with(35000)
+        self.assertEqual(window.skip.value(), 1)
+        self.assertFalse(window.stop.isEnabled())
+        window.stop_enabled.setChecked(True)
+        self.assertTrue(window.stop.isEnabled())
+        window.start.setValue(10)
+        window.stop.setValue(5)
+        with patch("extract_faces.app.QMessageBox.warning") as warning:
+            window.extract()
+            self.assertEqual(warning.call_args.args[1], "Invalid stop time")
         window.close()
 
     def test_gui_launch_without_console_streams(self):
@@ -95,7 +120,7 @@ class AppTests(unittest.TestCase):
         window.close()
 
     def test_roi_crops_original_video_and_honors_frame_skip(self):
-        # Keep the real forensicface extraction method; replace only model inference.
+        # Use real video reading and crop saving; replace only model inference.
         class FakeDetector:
             extract_faces = ForensicFace.extract_faces
 
@@ -129,6 +154,12 @@ class AppTests(unittest.TestCase):
             self.assertEqual(cv2.imread(str(crops[0])).shape[:2], (8, 8))
             self.assertGreater(cv2.imread(str(crops[0])).mean(), 150)
             self.assertIn("Finished: 2", messages[-1])
+
+            worker = ExtractionWorker(video, str(Path(temporary) / "limited"), None,
+                                      1, 1, 0.2, False, stop_at=0.4)
+            with patch("forensicface.app.ForensicFace", return_value=FakeDetector()):
+                worker.run()
+            self.assertEqual(len(list((Path(temporary) / "limited").glob("*.png"))), 2)
 
     def test_cancel_before_first_frame(self):
         class FakeDetector:

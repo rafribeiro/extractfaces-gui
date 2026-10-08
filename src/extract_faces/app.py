@@ -7,12 +7,12 @@ from pathlib import Path
 
 import cv2
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QTextCursor
+from PySide6.QtGui import QColor, QImage, QKeySequence, QPainter, QPen, QShortcut, QTextCursor
 from PySide6.QtMultimedia import QMediaMetaData, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
-    QPlainTextEdit, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QSlider, QSpinBox, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget,
 )
 
 
@@ -122,6 +122,24 @@ class VideoView(QWidget):
                 math.ceil(self.region.right()), math.ceil(self.region.bottom()))
 
 
+class SeekSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            option = QStyleOptionSlider()
+            self.initStyleOption(option)
+            groove = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
+            handle = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
+            value = QStyle.sliderValueFromPosition(self.minimum(), self.maximum(),
+                round(event.position().x() - groove.x() - handle.width() / 2),
+                max(1, groove.width() - handle.width()), option.upsideDown)
+            self.setValue(value)
+            self.setSliderDown(True)
+            self.sliderMoved.emit(value)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
 class ExtractionCancelled(Exception):
     pass
 
@@ -133,7 +151,7 @@ class ExtractionWorker(QThread):
     message = Signal(str)
 
     def __init__(self, video, destination, region, every_n_frames, margin, start_from,
-                 use_gpu, det_size=320, det_thresh=0.5):
+                 use_gpu, det_size=320, det_thresh=0.5, stop_at=None):
         super().__init__()
         self.video = video
         self.destination = destination
@@ -141,6 +159,7 @@ class ExtractionWorker(QThread):
         self.every_n_frames = every_n_frames
         self.margin = margin
         self.start_from = start_from
+        self.stop_at = stop_at
         self.use_gpu = use_gpu
         self.det_size = det_size
         self.det_thresh = det_thresh
@@ -177,16 +196,49 @@ class ExtractionWorker(QThread):
 
             # extract_faces has no ROI argument; adapt this instance's image processing.
             detector.process_image = process_region
-            count = detector.extract_faces(
-                self.video, dest_folder=self.destination, every_n_frames=self.every_n_frames,
-                margin=self.margin, start_from=self.start_from,
-            )
+            count = self.extract_video(detector)
             self.message.emit(f"Finished: {count} face crops saved to {self.destination}")
         except ExtractionCancelled:
             self.message.emit("Extraction cancelled. Crops already saved remain in the output folder.")
         except Exception as error:
             traceback.print_exc()
             self.message.emit(f"Extraction failed: {error}")
+
+
+    def extract_video(self, detector):
+        from forensicface.geometry import extend_bbox
+        from forensicface.image_io import write_image
+
+        capture = cv2.VideoCapture(self.video)
+        count = 0
+        try:
+            if self.isInterruptionRequested():
+                raise ExtractionCancelled()
+            if not capture.isOpened():
+                raise ValueError("The video could not be read.")
+            fps = capture.get(cv2.CAP_PROP_FPS)
+            if not math.isfinite(fps) or fps <= 0:
+                raise ValueError("The video has no valid frame rate.")
+            frame_index = int(fps * self.start_from)
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            Path(self.destination).mkdir(parents=True, exist_ok=True)
+            while self.stop_at is None or frame_index / fps < self.stop_at:
+                if self.isInterruptionRequested():
+                    raise ExtractionCancelled()
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                frame_index += 1
+                if frame_index % self.every_n_frames:
+                    continue
+                for face_index, result in enumerate(detector.process_image(frame, single_face=False)):
+                    box = extend_bbox(result["bbox"], frame.shape, margin_factor=self.margin)
+                    path = Path(self.destination) / f"frame_{frame_index:07}_face_{face_index:02}.png"
+                    write_image(str(path), frame[box[1]:box[3], box[0]:box[2]])
+                    count += 1
+        finally:
+            capture.release()
+        return count
 
 
 class MainWindow(QMainWindow):
@@ -201,6 +253,11 @@ class MainWindow(QMainWindow):
         self.fps = 0
 
         self.player = QMediaPlayer(self)
+        self.seek_shortcuts = []
+        for key, offset in ((Qt.Key.Key_Left, -10000), (Qt.Key.Key_Right, 10000)):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(lambda offset=offset: self.seek_relative(offset))
+            self.seek_shortcuts.append(shortcut)
         self.sink = QVideoSink(self)
         self.player.setVideoSink(self.sink)
         self.view = VideoView()
@@ -219,8 +276,11 @@ class MainWindow(QMainWindow):
         self.play_button = QPushButton("Play / Pause")
         self.play_button.clicked.connect(self.toggle_playback)
         playback.addWidget(self.play_button)
-        self.seek = QSlider(Qt.Orientation.Horizontal)
+        self.seek = SeekSlider(Qt.Orientation.Horizontal)
+        self.seek.setSingleStep(10000)
+        self.seek.setToolTip("Click or drag to seek; Left / Right move by 10 seconds.")
         self.seek.sliderMoved.connect(self.player.setPosition)
+        self.seek.actionTriggered.connect(lambda action: self.player.setPosition(self.seek.sliderPosition()))
         self.player.positionChanged.connect(self.update_position)
         self.player.durationChanged.connect(lambda duration: self.seek.setRange(0, duration))
         playback.addWidget(self.seek, 1)
@@ -261,9 +321,9 @@ class MainWindow(QMainWindow):
         self.margin.setToolTip("1 keeps the detected box; 2 doubles its width and height.")
         form.addRow("Crop size multiplier", self.margin)
         self.skip = QSpinBox()
-        self.skip.setRange(0, 100000)
-        self.skip.setToolTip("0 processes every frame; 4 processes every fifth frame.")
-        form.addRow("Frames to skip", self.skip)
+        self.skip.setRange(1, 100000)
+        self.skip.setToolTip("1 processes every frame; 5 looks for faces once every 5 frames.")
+        form.addRow("Process every Nth frame", self.skip)
         self.start = QDoubleSpinBox()
         self.start.setRange(0, 864000)
         self.start.setSuffix(" s")
@@ -273,6 +333,20 @@ class MainWindow(QMainWindow):
         current_button.clicked.connect(lambda: self.start.setValue(self.player.position() / 1000))
         start_row.addWidget(current_button)
         form.addRow("Start time", start_row)
+        self.stop_enabled = QCheckBox("Stop at")
+        self.stop = QDoubleSpinBox()
+        self.stop.setRange(0, 864000)
+        self.stop.setSuffix(" s")
+        self.stop.setEnabled(False)
+        self.stop_enabled.toggled.connect(self.stop.setEnabled)
+        stop_row = QHBoxLayout()
+        stop_row.addWidget(self.stop)
+        self.stop_current = QPushButton("Use current position")
+        self.stop_current.setEnabled(False)
+        self.stop_enabled.toggled.connect(self.stop_current.setEnabled)
+        self.stop_current.clicked.connect(lambda: self.stop.setValue(self.player.position() / 1000))
+        stop_row.addWidget(self.stop_current)
+        form.addRow(self.stop_enabled, stop_row)
         self.det_size = QSpinBox()
         self.det_size.setRange(32, 4096)
         self.det_size.setSingleStep(32)
@@ -387,6 +461,9 @@ class MainWindow(QMainWindow):
         self.destination.setText(str(Path(path).with_name(Path(path).stem + "_faces")))
         self.start.setValue(0)
         self.start.setMaximum(max(0, self.duration_seconds - 0.01))
+        self.stop_enabled.setChecked(False)
+        self.stop.setMaximum(self.duration_seconds)
+        self.stop.setValue(self.duration_seconds)
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.play()
         self.extract_button.setEnabled(True)
@@ -415,12 +492,27 @@ class MainWindow(QMainWindow):
         region = self.view.region_pixels()
         self.region_label.setText(f"Pixels (x1, y1, x2, y2): {region}" if region else "Full frame — drag on the video to select a region")
 
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self.seek_relative(-10000 if event.key() == Qt.Key.Key_Left else 10000)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def seek_relative(self, offset):
+        if self.video_path:
+            self.player.setPosition(max(0, min(self.player.duration(), self.player.position() + offset)))
+
     def choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Output folder", self.destination.text())
         if folder:
             self.destination.setText(folder)
 
     def extract(self):
+        stop_at = self.stop.value() if self.stop_enabled.isChecked() else None
+        if stop_at is not None and stop_at <= self.start.value():
+            QMessageBox.warning(self, "Invalid stop time", "Stop time must be later than start time.")
+            return
         destination = self.destination.text().strip()
         if not destination:
             QMessageBox.warning(self, "Output folder required", "Choose a folder for the PNG crops.")
@@ -440,14 +532,15 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(False)
         self.extract_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
-        every_n = self.skip.value() + 1
-        estimated_frames = max(1, math.ceil((self.duration_seconds - self.start.value()) * self.fps / every_n))
+        every_n = self.skip.value()
+        end = stop_at if stop_at is not None else self.duration_seconds
+        estimated_frames = max(1, math.ceil((end - self.start.value()) * self.fps / every_n))
         self.progress.setRange(0, estimated_frames if self.fps else 0)
         self.progress.setValue(0)
         self.status.setText("Loading face detector…")
         self.worker = ExtractionWorker(self.video_path, str(folder), self.view.region_pixels(),
                                        every_n, self.margin.value(), self.start.value(), self.gpu.isChecked(),
-                                       det_size=self.det_size.value(), det_thresh=self.det_thresh.value())
+                                       det_size=self.det_size.value(), det_thresh=self.det_thresh.value(), stop_at=stop_at)
         self.worker.progress.connect(self.update_progress)
         self.worker.message.connect(self.status.setText)
         self.worker.finished.connect(self.extraction_finished)
